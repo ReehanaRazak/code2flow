@@ -207,7 +207,6 @@ def _filter_for_subset(subset_params, all_nodes, edges, file_groups):
     new_file_groups = _filter_groups_for_subset(new_nodes, file_groups)
     return new_file_groups, list(new_nodes), new_edges
 
-
 def generate_json(nodes, edges):
     '''
     Generate a json string from nodes and edges
