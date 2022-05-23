@@ -872,3 +872,111 @@ def main(sys_argv=None):
         subset_params=subset_params,
         level=level,
     )
+
+def code2flow_rootnode(raw_source_paths, output_file, language=None, hide_legend=True,
+              exclude_namespaces=None, exclude_functions=None,
+              include_only_namespaces=None, include_only_functions=None,
+              no_grouping=False, no_trimming=False, skip_parse_errors=False,
+              lang_params=None, subset_params=None, level=logging.INFO):
+    """
+    Top-level function. Generate a diagram based on source code.
+    Can generate either a dotfile or an image.
+    :param list[str] raw_source_paths: file or directory paths
+    :param str|file output_file: path to the output file. SVG/PNG will generate an image.
+    :param str language: input language extension
+    :param bool hide_legend: Omit the legend from the output
+    :param list exclude_namespaces: List of namespaces to exclude
+    :param list exclude_functions: List of functions to exclude
+    :param list include_only_namespaces: List of namespaces to include
+    :param list include_only_functions: List of functions to include
+    :param bool no_grouping: Don't group functions into namespaces in the final output
+    :param bool no_trimming: Don't trim orphaned functions / namespaces
+    :param bool skip_parse_errors: If a language parser fails to parse a file, skip it
+    :param lang_params LanguageParams: Object to store lang-specific params
+    :param subset_params SubsetParams: Object to store subset-specific params
+    :param int level: logging level
+    :rtype: None
+    """
+    start_time = time.time()
+
+    if not isinstance(raw_source_paths, list):
+        raw_source_paths = [raw_source_paths]
+    lang_params = lang_params or LanguageParams()
+
+    exclude_namespaces = exclude_namespaces or []
+    assert isinstance(exclude_namespaces, list)
+    exclude_functions = exclude_functions or []
+    assert isinstance(exclude_functions, list)
+    include_only_namespaces = include_only_namespaces or []
+    assert isinstance(include_only_namespaces, list)
+    include_only_functions = include_only_functions or []
+    assert isinstance(include_only_functions, list)
+
+    logging.basicConfig(format="Code2Flow: %(message)s", level=level)
+
+    sources, language = get_sources_and_language(raw_source_paths, language)
+
+    output_ext = None
+    if isinstance(output_file, str):
+        assert '.' in output_file, "Output filename must end in one of: %r." % set(VALID_EXTENSIONS)
+        output_ext = output_file.rsplit('.', 1)[1] or ''
+        assert output_ext in VALID_EXTENSIONS, "Output filename must end in one of: %r." % \
+                                               set(VALID_EXTENSIONS)
+
+    final_img_filename = None
+    if output_ext and output_ext in IMAGE_EXTENSIONS:
+        if not is_installed('dot') and not is_installed('dot.exe'):
+            raise AssertionError(
+                "Can't generate a flowchart image because neither `dot` nor "
+                "`dot.exe` was found. Either install graphviz (see the README) "
+                "or, if you just want an intermediate text file, set your --output "
+                "file to use a supported text extension: %r" % set(TEXT_EXTENSIONS))
+        final_img_filename = output_file
+        output_file, extension = output_file.rsplit('.', 1)
+        output_file += '.gv'
+
+    file_groups, all_nodes, edges = map_it(sources, language, no_trimming,
+                                           exclude_namespaces, exclude_functions,
+                                           include_only_namespaces, include_only_functions,
+                                           skip_parse_errors, lang_params)
+
+    if subset_params:
+        logging.info("Filtering into subset...")
+        file_groups, all_nodes, edges = _filter_for_subset(subset_params, all_nodes, edges, file_groups)
+
+    file_groups.sort()
+    all_nodes.sort()
+    edges.sort()
+
+    logging.info("Generating output file...")
+
+    if isinstance(output_file, str):
+        with open(output_file, 'w') as fh:
+            as_json = output_ext == 'json'
+            data=write_file1(fh, nodes=all_nodes, edges=edges,
+                       groups=file_groups, hide_legend=hide_legend,
+                       no_grouping=no_grouping, as_json=as_json)
+
+            return data
+    else:
+        write_file(output_file, nodes=all_nodes, edges=edges,
+                   groups=file_groups, hide_legend=hide_legend,
+                   no_grouping=no_grouping)
+
+    logging.info("Wrote output file %r with %d nodes and %d edges.",
+                 output_file, len(all_nodes), len(edges))
+    if not output_ext == 'json':
+        logging.info("For better machine readability, you can also try outputting in a json format.")
+    logging.info("Code2flow finished processing in %.2f seconds." % (time.time() - start_time))
+
+    # translate to an image if that was requested
+    if final_img_filename:
+        _generate_final_img(output_file, extension, final_img_filename, len(edges))
+
+def write_file1(outfile, nodes, edges, groups, hide_legend=False,
+               no_grouping=False, as_json=False):
+
+    if as_json:
+        content = generate_json(nodes, edges)
+        data=json.loads(content)
+        return data
